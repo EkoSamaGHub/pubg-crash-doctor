@@ -1,0 +1,9 @@
+# Your personal scan output stays local — never commit it
+report-data.js
+
+# Windows / editor cruft
+Thumbs.db
+desktop.ini
+*.log
+.vs/
+.vscode/
