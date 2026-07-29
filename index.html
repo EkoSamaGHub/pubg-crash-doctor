@@ -93,6 +93,8 @@
     <p class="sub" id="genLine"></p>
     <div class="verdict"><div class="k">Verdict</div><div class="v" id="verdict"></div></div>
 
+    <div id="classBox"></div>
+
     <div class="grid" id="sysgrid"></div>
 
     <div class="btnrow">
@@ -103,7 +105,14 @@
     <h2>What your logs &amp; event viewer show</h2>
     <div id="findings"></div>
 
-    <h2>Do this, in order</h2>
+    <div id="acBlock" class="hide">
+      <h2>Fix the launch block first (anti-cheat)</h2>
+      <p class="sub" style="margin-top:-4px">This is <strong>not</strong> a hardware fault — PUBG Shield stopped the game from starting because something looked like it was hooking into it. Reinstalling rarely helps; removing the conflict does.</p>
+      <div id="acFacts" class="grid"></div>
+      <ol class="fixes" id="acFixes"></ol>
+    </div>
+
+    <h2 id="fixesHead">Do this, in order</h2>
     <p class="sub" style="margin-top:-4px">Steps highlighted in gold are the ones your scan specifically points to. Work top-to-bottom and test after each.</p>
     <ol class="fixes" id="fixes"></ol>
 
@@ -115,7 +124,7 @@
 
   <!-- ================= LANDING MODE ================= -->
   <div id="landing" class="hide">
-    <p class="sub">A tiny, open-source tool that reads your PUBG logs and Windows crash records, then tells you the <em>likely</em> cause of your crashes — and what to try, cheapest first. It <strong>changes nothing</strong> on your PC and uploads nothing.</p>
+    <p class="sub">A tiny, open-source tool that reads your PUBG logs, anti-cheat records and Windows crash events, then tells you the <em>likely</em> cause — and what to try, cheapest first. It <strong>changes nothing</strong> on your PC and uploads nothing.</p>
 
     <div class="verdict"><div class="k">Why this exists</div><div class="v" style="font-size:15px;font-weight:550">That “Out of video memory” error is usually lying. On an 8&nbsp;GB+ card at 1080p you aren’t actually out of VRAM — the real cause is normally an unstable RAM/XMP profile, a shaky overclock, a starved pagefile, a bad driver, or a tired PSU. This tool finds which.</div></div>
 
@@ -129,9 +138,17 @@
 
     <div class="btnrow"><button class="act" id="demoBtn">👀 See an example report</button></div>
 
+    <h2>It handles both kinds of PUBG failure</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+      <div class="card"><div class="k">💥 Instability</div><div class="v" style="font-size:13.5px;font-weight:550">“Out of video memory”, crash mid-game, freezes, PC powers off → RAM/XMP, overclock, pagefile, driver, PSU</div></div>
+      <div class="card"><div class="k">🛡️ Anti-cheat block</div><div class="v" style="font-size:13.5px;font-weight:550">“Interrupted by external program”, PUBG Shield, <code>pubg_fail.log</code>, <code>[MHV]</code> → overlays, RGB/macro suites, injectors, hypervisor</div></div>
+    </div>
+    <p class="sub">Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, or reinstall Windows over unstable memory. The tool tells you which you have (or both).</p>
+
     <h2>What it checks</h2>
     <div class="grid">
       <div class="card"><div class="k">PUBG logs</div><div class="v" style="font-size:13.5px;font-weight:550">GPU-crash, “out of video memory”, render-thread hangs</div></div>
+      <div class="card"><div class="k">Anti-cheat</div><div class="v" style="font-size:13.5px;font-weight:550">pubg_fail.log code &amp; diagnostic, injected modules, overlay apps, hypervisor</div></div>
       <div class="card"><div class="k">Event Viewer</div><div class="v" style="font-size:13.5px;font-weight:550">Kernel-Power 41, WHEA hardware faults, driver TDRs</div></div>
       <div class="card"><div class="k">Memory</div><div class="v" style="font-size:13.5px;font-weight:550">XMP/EXPO state &amp; actual vs rated speed</div></div>
       <div class="card"><div class="k">System</div><div class="v" style="font-size:13.5px;font-weight:550">Pagefile, GPU driver &amp; date, VRAM, disk health</div></div>
@@ -147,8 +164,21 @@
 <script>
 // ---------- demo data (also used for GitHub Pages preview) ----------
 const DEMO = {
-  tool:"PUBG Crash Doctor", version:"1.0", generatedAt:"(example)", pubgInstalled:true,
-  verdict:"Signs of memory/power instability - the XMP-off test is your top priority",
+  tool:"PUBG Crash Doctor", version:"1.1", generatedAt:"(example)", pubgInstalled:true,
+  errorClass:"both",
+  verdict:"Signs of memory/power instability - the XMP-off test is your top priority  +  anti-cheat also blocked a launch (two separate problems)",
+  anticheat:{blocked:true,lastBlock:"2026-07-17 20:33",code:"0x00000E01/0x00000021",diagnostic:"[MHV]",
+    injectedModules:[],conflictingApps:["ASUS Armoury Crate / ROG Live Service","Corsair iCUE","Logitech G HUB / Options"],
+    hypervisor:true,memoryIntegrity:true},
+  anticheatFixes:[
+    {step:1,title:"Fully exit every overlay, RGB and macro app",body:"Quit from the system tray too: RTSS/Afterburner, Overwolf, OBS, Razer Synapse, iCUE, Armoury Crate, G HUB, Wallpaper Engine, Nahimic.",relevant:true},
+    {step:2,title:"Turn off in-game overlays",body:"Steam, Discord, NVIDIA App/GeForce Experience, Xbox Game Bar.",relevant:true},
+    {step:3,title:"Remove anything that injects into games",body:"Trainers, unofficial mods, FPS 'boosters' are blocked outright.",relevant:false},
+    {step:4,title:"Test with virtualization off (the [MHV] case)",body:"Turn OFF Core Isolation > Memory Integrity, reboot, retry. If you use Hyper-V/WSL2/Docker/Sandbox, disable those features as a TEST.",relevant:true},
+    {step:5,title:"Repair the anti-cheat / game files",body:"Steam > Verify integrity, then reinstall BattlEye via Install_BattlEye.bat.",relevant:true},
+    {step:6,title:"Repair Windows itself",body:"sfc /scannow, then DISM /Online /Cleanup-Image /RestoreHealth.",relevant:true},
+    {step:7,title:"Boot clean to identify the conflict",body:"msconfig > hide Microsoft services > disable all > reboot > launch. Re-enable in halves.",relevant:true}
+  ],
   system:{cpu:"Intel Core i7-11700K",cores:8,ramGB:31.8,gpu:"NVIDIA GeForce RTX 3060",gpuVendor:"NVIDIA",driver:"591.86",driverDate:"2026-01-20",vramMB:12288,os:"Windows 11"},
   memory:{sticks:2,ratedMax:3200,currentMax:3200,xmp:"ON"},
   pagefile:{allocatedMB:32562,systemManaged:true,flagged:false},
@@ -202,6 +232,38 @@ function render(r){
   document.getElementById('sysgrid').innerHTML=cards.map(c=>
     `<div class="card"><div class="k">${c[0]}</div><div class="v ${c[2]}">${c[1]}</div></div>`).join('');
 
+  // ---- error class banner + anti-cheat section ----
+  const ac=r.anticheat||{}, cls=r.errorClass||(ac.blocked?'anticheat':'instability');
+  const CLS_TXT={
+    anticheat:["🛡️ Launch blocked by anti-cheat","PUBG Shield stopped the game from starting (“Interrupted by external program”). This is a <strong>software conflict, not broken hardware</strong> — work the anti-cheat list below."],
+    instability:["💥 Crashes / instability","The game (or the PC) is failing while running. Work the ordered fix list below."],
+    both:["⚠️ Two separate problems","You have <strong>both</strong> an anti-cheat launch block <em>and</em> crash/instability evidence. They have different causes — fix the launch block first, then work the crash list."],
+    none:["✅ Nothing conclusive recorded","No crash or anti-cheat evidence found in your logs yet. If the problem is ongoing, reproduce it once and re-run this scan."]
+  };
+  const ct=CLS_TXT[cls]||CLS_TXT.instability;
+  document.getElementById('classBox').innerHTML=
+    `<div class="verdict" style="border-left-color:${cls==='none'?'var(--low)':cls==='instability'?'var(--high)':'var(--info)'}">
+       <div class="k">Problem type</div><div class="v">${ct[0]}</div>
+       <div class="fd" style="color:var(--muted);font-size:13.5px;margin-top:5px">${ct[1]}</div></div>`;
+
+  if(ac.blocked){
+    document.getElementById('acBlock').classList.remove('hide');
+    const facts=[
+      ['Last block',esc(ac.lastBlock||'—')],
+      ['Code',esc(ac.code||'—')],
+      ['Diagnostic',esc(ac.diagnostic||'—')],
+      ['Conflicting apps running',asArr(ac.conflictingApps).length?esc(asArr(ac.conflictingApps).join(', ')):'none detected'],
+      ['Injected modules',asArr(ac.injectedModules).length?esc(asArr(ac.injectedModules).join(', ')):'none'],
+      ['Hypervisor / Memory Integrity',`${ac.hypervisor?'on':'off'} / ${ac.memoryIntegrity?'on':'off'}`]
+    ];
+    document.getElementById('acFacts').innerHTML=facts.map(f=>
+      `<div class="card"><div class="k">${f[0]}</div><div class="v" style="font-size:13.5px;font-weight:550">${f[1]}</div></div>`).join('');
+    document.getElementById('acFixes').innerHTML=asArr(r.anticheatFixes).map(x=>
+      `<li class="${x.relevant?'hot':''}"><div class="ft">${esc(x.title)}${x.relevant?'<span class="tag">your scan</span>':''}</div>
+        <div class="fb">${esc(x.body)}</div></li>`).join('');
+    document.getElementById('fixesHead').textContent=(cls==='both')?'Then fix the crashes, in order':'Do this, in order';
+  }
+
   const fs=asArr(r.findings).slice().sort((a,b)=>(SEV_RANK[a.severity]??9)-(SEV_RANK[b.severity]??9));
   document.getElementById('findings').innerHTML=fs.map(f=>
     `<div class="finding"><span class="dot s-${esc(f.severity)}"></span>
@@ -225,6 +287,14 @@ function summaryText(r){
   L.push(`Rig: ${s.cpu} · ${s.gpu} (driver ${s.driver}${s.driverDate?', '+s.driverDate:''}) · ${s.ramGB} GB RAM · ${fmtVram(s.vramMB)} VRAM`);
   L.push(`RAM: ${m.currentMax}/${m.ratedMax} MT/s · XMP ${m.xmp} · Pagefile ${(r.pagefile||{}).systemManaged?'system-managed':(r.pagefile||{}).allocatedMB+' MB'}`);
   L.push('');
+  const ac=r.anticheat||{};
+  if(ac.blocked){
+    L.push(`Anti-cheat: BLOCKED at launch (${ac.lastBlock}) code ${ac.code} ${ac.diagnostic||''}`);
+    if(asArr(ac.conflictingApps).length) L.push(`- Overlay/RGB apps running: ${asArr(ac.conflictingApps).join(', ')}`);
+    if(asArr(ac.injectedModules).length) L.push(`- Modules inside game: ${asArr(ac.injectedModules).join(', ')}`);
+    L.push(`- Hypervisor: ${ac.hypervisor?'on':'off'} · Memory Integrity: ${ac.memoryIntegrity?'on':'off'}`);
+    L.push('');
+  }
   L.push('Evidence:');
   L.push(`- "Out of video memory" in logs: ${e.outOfVideoMem} · GPU-crash: ${e.gpuCrash} · render-hang: ${e.renderHang}`);
   L.push(`- Crash reports on disk: ${e.crashReports}${e.lastCrash?' (latest '+e.lastCrash+')':''}`);

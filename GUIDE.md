@@ -21,6 +21,43 @@ Once you stop trusting the error message, you can actually diagnose it.
 
 ---
 
+## First: which problem do you actually have?
+
+There are **two completely different failure classes**, and they need opposite fixes. Check which one matches you before reading further:
+
+| You see… | Class | Read |
+|---|---|---|
+| "Out of video memory", crash-to-desktop **mid-game**, freezes, PC powers off | **Instability** | The rest of this guide |
+| **"Interrupted by external program"** / "Application is interrupted by external software", PUBG Shield Reporter, `pubg_fail.log`, codes like `00000252/0021` or `[MHV]` — usually **at launch** | **Anti-cheat block** | The section right below |
+
+Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, or reinstall Windows over unstable memory.
+
+---
+
+## Class B — "Interrupted by external program" (PUBG Shield / BattlEye)
+
+This means **PUBG's anti-cheat stopped the game from starting** because something on your PC looked like it was hooking into the game. Your hardware is almost certainly fine, and **"please reinstall the program" is bad advice** — reinstalling rarely fixes it.
+
+The dialog names a log at `…\PUBG\TslGame\Binaries\Win64\pubg_fail.log`. That file is JSON (UTF-16) and contains the real clues: an error `code`, a `diagnostic` tag, and the full list of **modules loaded inside the game**.
+
+**Fix it in this order:**
+
+1. **Fully exit every overlay, RGB and macro app** — and I mean *quit from the system tray*, not just close the window. The usual offenders: **RivaTuner/RTSS, MSI Afterburner, Overwolf, OBS, Razer Synapse, Corsair iCUE, ASUS Armoury Crate, Logitech G HUB, SteelSeries GG, Wallpaper Engine, Rainmeter, Nahimic**. Relaunch after removing each one to find the culprit.
+2. **Turn off in-game overlays** — Steam (Settings → In Game), Discord (Game Overlay), NVIDIA App / GeForce Experience, Xbox Game Bar.
+3. **Uninstall anything that injects into games** — trainers, unofficial mods, "FPS boosters", cheat tools. These are blocked by design. Some antivirus "game modes" and sandboxes hook games too.
+4. **If your log shows `[MHV]` — suspect virtualization.** This tag appears alongside hypervisor-based features. Turn **off Core Isolation → Memory Integrity** (Windows Security → Device Security), reboot, retry. If it persists and you run **Hyper-V, WSL2, Docker Desktop, Windows Sandbox, or a VM platform**, disable those Windows features as a *test* (`bcdedit /set hypervisorlaunchtype off`, reboot — reverse with `…/set hypervisorlaunchtype auto` if it wasn't the cause).
+5. **Repair game + anti-cheat** — Steam → Verify integrity, then reinstall BattlEye (`BattlEye\Install_BattlEye.bat` in the game's Binaries folder).
+6. **Repair Windows** — `sfc /scannow`, then `DISM /Online /Cleanup-Image /RestoreHealth`. Corrupt system files make anti-cheat fail its integrity checks.
+7. **Clean boot to isolate it** — `msconfig` → Services → *Hide all Microsoft services* → Disable all → reboot → launch. If it works, re-enable in halves until the conflict reappears.
+
+> **Note on `[MHV]`:** Krafton doesn't publish what its diagnostic tags mean. The hypervisor link is a strong, widely-reported correlation — not an official definition. Treat step 4 as a high-value *test*, not a guarantee.
+
+Official Krafton note on this error: [support.pubg.com](https://support.pubg.com/hc/en-us/articles/360044878374-When-I-start-the-game-I-see-a-Xenuine-error-message-that-says-Application-is-interrupted-by-external-software)
+
+---
+
+## Class A — crashes & instability
+
 ## Step 1 — Read the evidence (don't guess)
 
 Your PC already recorded what happened. Three places to look:

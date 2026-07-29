@@ -8,11 +8,23 @@ If PUBG crashes to desktop, throws **“Out of video memory trying to allocate a
 
 ---
 
+## It handles both kinds of PUBG failure
+
+The tool first works out **which problem you actually have**, because these need opposite fixes:
+
+| Symptom | Class | What it means |
+|---|---|---|
+| "Out of video memory", crash mid-game, freeze, PC powers off | 💥 **Instability** | Hardware/driver — RAM/XMP, overclock, pagefile, PSU |
+| **"Interrupted by external program"**, PUBG Shield Reporter, `pubg_fail.log`, `[MHV]` | 🛡️ **Anti-cheat block** | A software conflict at launch — overlays, RGB/macro suites, injectors, hypervisor |
+
+Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, or reinstall Windows over unstable memory. If you have **both**, the tool says so and orders the work.
+
 ## What it does
 
 `diagnose.ps1` runs a **read-only** scan and builds a local report that `index.html` renders in your browser:
 
 - **PUBG logs** — `LogGPUCrash`, `E_OUTOFMEMORY`, render-thread hangs, fatal errors
+- **Anti-cheat** — parses `pubg_fail.log` (error code, diagnostic tag, modules loaded *inside* the game) and detects overlay/RGB/macro software that's running plus hypervisor / Memory Integrity state
 - **Windows Event Viewer** — Kernel-Power **41** (with/without bluescreen), **WHEA** hardware faults, GPU driver **TDRs**
 - **Memory** — XMP/EXPO state, actual vs rated speed
 - **System** — pagefile config, GPU driver + date, VRAM, disk health
@@ -48,7 +60,9 @@ No install, no dependencies. Works best on NVIDIA (uses `nvidia-smi` for exact V
 
 ## The fixes it recommends (in order)
 
-Cheapest & most-likely first — do them one at a time and test after each:
+**If anti-cheat blocked your launch** it gives you a separate list first: exit overlays/RGB/macro apps from the tray → disable in-game overlays → remove injectors → test with Memory Integrity/hypervisor off (the `[MHV]` case) → repair game + BattlEye → `sfc`/`DISM` → clean boot.
+
+**For crashes/instability**, cheapest & most-likely first — do them one at a time and test after each:
 
 0. **Set the pagefile to System-managed** — fixes many false "out of video memory" errors.
 1. **Roll back / clean-reinstall the GPU driver** — newer isn't always more stable; disable auto-updates.

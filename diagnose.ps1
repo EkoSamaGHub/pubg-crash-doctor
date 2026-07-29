@@ -20,7 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$TOOL_VERSION = '1.0'
+$TOOL_VERSION = '1.1'
 if (-not $OutDir) { $OutDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 
 function Line($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
@@ -140,6 +140,105 @@ if ($crashes) {
 Line ("  Crash reports on disk:      {0}  (latest {1})" -f $crashes.Count, $lastCrash)
 
 # --------------------------------------------------------------------------
+# ANTI-CHEAT / LAUNCH BLOCK  ("Interrupted by external program", PUBG Shield)
+# This is a DIFFERENT failure class from instability crashes: the game is being
+# blocked from starting, not crashing mid-game.
+# --------------------------------------------------------------------------
+Head 'Anti-cheat (PUBG Shield / BattlEye)'
+
+# Find the game install (pubg_fail.log lives next to TslGame.exe)
+$failLog = $null
+$steamRoots = @()
+try {
+    $sp = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction SilentlyContinue).SteamPath
+    if ($sp) { $steamRoots += $sp.Replace('/', '\') }
+} catch {}
+$steamRoots += @("$env:ProgramFiles(x86)\Steam", "$env:ProgramFiles\Steam", 'C:\Steam')
+# also read library folders so non-C: installs are found
+foreach ($r in @($steamRoots | Select-Object -Unique)) {
+    $vdf = Join-Path $r 'steamapps\libraryfolders.vdf'
+    if (Test-Path $vdf) {
+        foreach ($m in ([regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"'))) {
+            $steamRoots += $m.Groups[1].Value.Replace('\\', '\')
+        }
+    }
+}
+foreach ($r in @($steamRoots | Select-Object -Unique)) {
+    $c = Join-Path $r 'steamapps\common\PUBG\TslGame\Binaries\Win64\pubg_fail.log'
+    if (Test-Path $c) { $failLog = $c; break }
+}
+
+$acCode = ''; $acDiag = ''; $acWhen = ''; $acInjected = @(); $acPresent = $false
+if ($failLog) {
+    $acPresent = $true
+    $acWhen = (Get-Item $failLog).LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+    try {
+        $rawAc = Get-Content $failLog -Raw -Encoding Unicode   # the file is UTF-16LE JSON
+        if ($rawAc -notmatch '^\s*\{') { $rawAc = Get-Content $failLog -Raw }
+        $acj = $rawAc | ConvertFrom-Json
+        $acCode = "$($acj.code)/$($acj.code2)"
+        $acDiag = (@($acj.diagnostic) -join ' ')
+        # third-party DLLs loaded INTO the game = the usual culprits.
+        # Exclude Windows' own DLLs and anything shipped inside the PUBG install
+        # (e.g. onnxruntime.dll is PUBG's own runtime, not an injection).
+        $gameRoot = Split-Path (Split-Path (Split-Path $failLog -Parent) -Parent) -Parent
+        $acInjected = @($acj.modules |
+            ForEach-Object { ($_ -split ':', 2)[-1] } |
+            Where-Object {
+                $_ -and $_ -notmatch '\\WINDOWS\\|\\System32\\|\\SysWOW64\\' `
+                    -and $_ -notmatch 'TslGame\.exe$' `
+                    -and ($_ -notlike "*$([regex]::Escape($gameRoot))*") `
+                    -and $_ -notmatch '\\PUBG\\|\\steamapps\\|steamclient|GameOverlay|BattlEye'
+            } |
+            ForEach-Object { Split-Path $_ -Leaf } | Sort-Object -Unique)
+    } catch {}
+    Line ("  pubg_fail.log found ({0})" -f $acWhen) 'Yellow'
+    if ($acCode) { Line ("  Code: {0}   Diagnostic: {1}" -f $acCode, $acDiag) }
+    if ($acInjected.Count) { Line ("  Non-Windows modules in the game: {0}" -f (($acInjected | Select-Object -First 8) -join ', ')) }
+} else {
+    Line '  No pubg_fail.log - no anti-cheat launch block recorded.'
+}
+
+# Software known to trip PUBG Shield / BattlEye (overlays, macro/RGB suites, injectors)
+$conflictMap = @(
+    @{ rx='RTSS|RivaTuner';              name='RivaTuner Statistics Server (RTSS)' }
+    @{ rx='MSIAfterburner|Afterburner';  name='MSI Afterburner (overlay)' }
+    @{ rx='Overwolf';                    name='Overwolf' }
+    @{ rx='obs64|obs32|obs-';            name='OBS (game capture hook)' }
+    @{ rx='Fraps|Bandicam|Dxtory';       name='Screen recorder (Fraps/Bandicam/Dxtory)' }
+    @{ rx='ArmouryCrate|ArmourySw|ROGLive'; name='ASUS Armoury Crate / ROG Live Service' }
+    @{ rx='iCUE|CorsairService';         name='Corsair iCUE' }
+    @{ rx='LightingService|LedKeeper';   name='RGB lighting service' }
+    @{ rx='Razer|Synapse';               name='Razer Synapse' }
+    @{ rx='SteelSeries|GG Engine';       name='SteelSeries GG' }
+    @{ rx='Logi.*Options|LGHUB|lghub';   name='Logitech G HUB / Options' }
+    @{ rx='Wallpaper64|wallpaper32';     name='Wallpaper Engine' }
+    @{ rx='Rainmeter';                   name='Rainmeter' }
+    @{ rx='Nahimic|SteelSeriesSonar';    name='Nahimic / Sonar audio overlay' }
+    @{ rx='CheatEngine|xenos|Extreme Injector'; name='Memory injector (WILL be blocked)' }
+    @{ rx='MacroRecorder|AutoHotkey';    name='Macro tool (AutoHotkey etc.)' }
+    @{ rx='DS4Windows|x360ce';           name='Controller remapper (DS4Windows/x360ce)' }
+    @{ rx='MSI Center|DragonCenter|GamingHub'; name='MSI Center / Dragon Center' }
+)
+$running = Get-Process | Select-Object -ExpandProperty Name -Unique
+$conflicts = @()
+foreach ($c in $conflictMap) { if ($running -match $c.rx) { $conflicts += $c.name } }
+$conflicts = @($conflicts | Sort-Object -Unique)
+Line ("  Overlay/RGB/macro software running: {0}" -f $(if ($conflicts.Count) { $conflicts -join ', ' } else { 'none detected' })) `
+     $(if ($conflicts.Count) { 'Yellow' } else { 'Gray' })
+
+# Hypervisor / virtualization  (PUBG's [MHV] diagnostic + common BattlEye conflict)
+$hyperPresent = [bool](Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+$vbsRunning = $false; $hvciOn = $false
+try {
+    $dgi = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction SilentlyContinue
+    $vbsRunning = ($dgi.VirtualizationBasedSecurityStatus -eq 2)
+    $hvciOn = (@($dgi.SecurityServicesRunning) -contains 2)
+} catch {}
+Line ("  Hypervisor running:     {0}" -f $hyperPresent) $(if ($hyperPresent) { 'Yellow' } else { 'Gray' })
+Line ("  Memory Integrity (HVCI): {0}" -f $hvciOn)       $(if ($hvciOn) { 'Yellow' } else { 'Gray' })
+
+# --------------------------------------------------------------------------
 # WINDOWS EVENT LOG
 # --------------------------------------------------------------------------
 Head 'Windows event log (last 30 days)'
@@ -219,10 +318,38 @@ if ($diskBad) {
     Add-Finding 'high' 'A disk reports non-healthy status' `
         'One of your drives is not reporting Healthy. Failing storage can corrupt game files and cause crashes; back up and check with the maker''s tool.'
 }
+# ---- anti-cheat / launch-block findings (different failure class) ----
+if ($acPresent) {
+    Add-Finding 'high' 'PUBG anti-cheat blocked the game from launching' `
+        ("PUBG Shield wrote pubg_fail.log on $acWhen$(if($acCode){" (code $acCode$(if($acDiag){", diagnostic $acDiag"}))"}). This is an 'Interrupted by external program' block, NOT an instability crash - the game was stopped at startup because something on the PC looked like it was hooking into it. Reinstalling rarely helps; removing the conflicting software does.")
+}
+if ($acInjected.Count -gt 0) {
+    Add-Finding 'high' 'Third-party code was loaded inside the game process' `
+        ("Non-Windows modules present: {0}. Anything here that is not part of PUBG is a prime suspect - close or uninstall it and retry." -f (($acInjected | Select-Object -First 8) -join ', '))
+}
+if ($conflicts.Count -gt 0) {
+    Add-Finding $(if ($acPresent) { 'high' } else { 'medium' }) 'Software running that commonly trips anti-cheat' `
+        ("Detected: {0}. Overlays, RGB/macro suites and capture tools inject into games and are the usual cause of 'Application is interrupted by external software'. Fully exit them (tray icons too) before launching." -f ($conflicts -join ', '))
+}
+if ($acPresent -and $acDiag -match 'MHV') {
+    Add-Finding 'high' 'Anti-cheat flagged a hypervisor ([MHV])' `
+        ("PUBG's diagnostic tag was $acDiag and this PC has hypervisor running=$hyperPresent, Memory Integrity=$hvciOn. Virtualization layers (Hyper-V, WSL2/Docker, Windows Sandbox, Core Isolation, some VPN/AV sandboxes) can trigger this block. Try turning off Memory Integrity and/or the Hyper-V/Virtual Machine Platform features, reboot, and retry.")
+} elseif ($acPresent -and ($hyperPresent -or $hvciOn)) {
+    Add-Finding 'medium' 'Virtualization features are active' `
+        "Hypervisor running=$hyperPresent, Memory Integrity=$hvciOn. These sometimes conflict with kernel anti-cheat. Worth disabling temporarily as a test if the launch block persists."
+}
+
 if ($findings.Count -eq 0) {
     Add-Finding 'info' 'No strong crash signature found' `
         'This scan did not find recorded crash evidence. If PUBG is still crashing, play a session then run this again so it can catch fresh logs, and enable HWiNFO logging for temperatures/voltages.'
 }
+
+# Which failure class(es) is this PC showing?
+$hasInstability = ($whea -gt 0 -or $kp0 -gt 0 -or $kpBsod -gt 0 -or @($oom).Count -gt 0 -or @($gpuCrash).Count -gt 0 -or @($rhang).Count -gt 0 -or $tdr -gt 0 -or @($wer).Count -ge 2)
+$errorClass = if ($acPresent -and $hasInstability) { 'both' }
+              elseif ($acPresent) { 'anticheat' }
+              elseif ($hasInstability) { 'instability' }
+              else { 'none' }
 
 # Headline verdict
 $verdict = 'No clear crash pattern detected yet'
@@ -230,6 +357,22 @@ if ($whea -gt 0) { $verdict = 'Hardware errors logged - test your RAM and check 
 elseif ($kp0 -gt 0 -or @($wer).Count -ge 2) { $verdict = 'Signs of memory/power instability - the XMP-off test is your top priority' }
 elseif (@($oom).Count -gt 0 -or @($gpuCrash).Count -gt 0) { $verdict = 'Graphics allocation failures - check pagefile, driver, and overclocks' }
 elseif (@($rhang).Count -gt 0 -or $tdr -gt 0) { $verdict = 'GPU hangs under load - driver / overclock / PSU' }
+if ($errorClass -eq 'anticheat') {
+    $verdict = 'Anti-cheat is blocking launch - close overlay/RGB software (this is not a hardware fault)'
+} elseif ($errorClass -eq 'both') {
+    $verdict = "$verdict  +  anti-cheat also blocked a launch (two separate problems)"
+}
+
+# Fix list for the anti-cheat / launch-block class
+$acFixes = @(
+    [ordered]@{ step=1; title='Fully exit every overlay, RGB and macro app'; body='Not just close the window - quit from the system tray: RTSS/Afterburner, Overwolf, OBS, Razer Synapse, iCUE, Armoury Crate, G HUB, SteelSeries, Wallpaper Engine, Rainmeter, Nahimic. Relaunch PUBG after each removal to find the culprit.'; relevant=($conflicts.Count -gt 0) }
+    [ordered]@{ step=2; title='Turn off in-game overlays'; body='Steam (Settings > In Game), Discord (User Settings > Game Overlay), NVIDIA App/GeForce Experience, Xbox Game Bar, and any browser/hardware overlay.'; relevant=$acPresent }
+    [ordered]@{ step=3; title='Remove anything that injects into games'; body='Cheat/injection tools, trainers, unofficial mods or FPS "boosters" will be blocked outright - uninstall them. Some AV "game modes" and sandboxes also hook games.'; relevant=($acInjected.Count -gt 0) }
+    [ordered]@{ step=4; title='Test with virtualization off (the [MHV] case)'; body='Turn OFF Core Isolation > Memory Integrity (Windows Security > Device Security), reboot and retry. If it persists and you use Hyper-V/WSL2/Docker/Windows Sandbox, disable those Windows features (or run "bcdedit /set hypervisorlaunchtype off", reboot) as a TEST - re-enable them afterwards if they are not the cause.'; relevant=($acDiag -match 'MHV' -or $hyperPresent -or $hvciOn) }
+    [ordered]@{ step=5; title='Repair the anti-cheat / game files'; body='Steam > PUBG > Properties > Installed Files > Verify integrity. Then reinstall BattlEye: run BattlEye\\Install_BattlEye.bat in the game Binaries folder, or reinstall from Steam.'; relevant=$acPresent }
+    [ordered]@{ step=6; title='Repair Windows itself'; body='In an admin terminal: "sfc /scannow", then "DISM /Online /Cleanup-Image /RestoreHealth". Corrupted system files can make anti-cheat fail its integrity checks.'; relevant=$acPresent }
+    [ordered]@{ step=7; title='Boot clean to identify the conflict'; body='Run msconfig > Services > Hide all Microsoft services > Disable all, reboot, and launch PUBG. If it works, re-enable services in halves until the culprit appears.'; relevant=$acPresent }
+)
 
 # Ordered recommendations (mirrors the guide). 'relevant' highlights ones the data supports.
 $rec = @(
@@ -251,6 +394,7 @@ $report = [ordered]@{
     version      = $TOOL_VERSION
     generatedAt  = (Get-Date).ToString('yyyy-MM-dd HH:mm')
     pubgInstalled = [bool]$pubgInstalled
+    errorClass   = $errorClass
     verdict      = $verdict
     system = [ordered]@{
         cpu = Clean $cpu.Name; cores = [int]$cpu.NumberOfCores
@@ -279,8 +423,20 @@ $report = [ordered]@{
         gpuTimeouts    = $tdr
         otherAppCrashes= @($wer | Select-Object -First 8)
     }
+    anticheat = [ordered]@{
+        blocked        = [bool]$acPresent
+        logPath        = $failLog
+        lastBlock      = $acWhen
+        code           = $acCode
+        diagnostic     = $acDiag
+        injectedModules= @($acInjected | Select-Object -First 10)
+        conflictingApps= @($conflicts)
+        hypervisor     = [bool]$hyperPresent
+        memoryIntegrity= [bool]$hvciOn
+    }
     findings = @($findings)
     recommendations = @($rec)
+    anticheatFixes = @($acFixes)
 }
 
 $json = $report | ConvertTo-Json -Depth 8
