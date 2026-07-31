@@ -23,14 +23,15 @@ Once you stop trusting the error message, you can actually diagnose it.
 
 ## First: which problem do you actually have?
 
-There are **two completely different failure classes**, and they need opposite fixes. Check which one matches you before reading further:
+There are **three completely different failure classes**, and they need different fixes. Check which one matches you before reading further:
 
 | You see… | Class | Read |
 |---|---|---|
 | "Out of video memory", crash-to-desktop **mid-game**, freezes, PC powers off | **Instability** | The rest of this guide |
-| **"Interrupted by external program"** / "Application is interrupted by external software", PUBG Shield Reporter, `pubg_fail.log`, codes like `00000252/0021` or `[MHV]` — usually **at launch** | **Anti-cheat block** | The section right below |
+| **"Interrupted by external program"** / "Application is interrupted by external software", PUBG Shield Reporter, `pubg_fail.log`, codes like `00000252/0021` or `[MHV]` — usually **at launch** | **Anti-cheat block** | Class B, right below |
+| **"[25] BattlEye: Corrupted Data"** or similar checksum/verification failures | **File integrity** | Class C |
 
-Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, or reinstall Windows over unstable memory.
+Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, reinstall Windows over unstable memory, or reinstall the game ten times when their antivirus is quietly eating BattlEye.
 
 ---
 
@@ -53,6 +54,33 @@ The dialog names a log at `…\PUBG\TslGame\Binaries\Win64\pubg_fail.log`. That 
 > **Note on `[MHV]`:** Krafton doesn't publish what its diagnostic tags mean. The hypervisor link is a strong, widely-reported correlation — not an official definition. Treat step 4 as a high-value *test*, not a guarantee.
 
 Official Krafton note on this error: [support.pubg.com](https://support.pubg.com/hc/en-us/articles/360044878374-When-I-start-the-game-I-see-a-Xenuine-error-message-that-says-Application-is-interrupted-by-external-software)
+
+---
+
+## Class C — "[25] BattlEye: Corrupted Data"
+
+This one is neither a crash nor a software conflict: **a checksum failed.** BattlEye verified some data and it wasn't what it was supposed to be, so it refuses to run. The distinction matters because the fixes are different from both other classes — and because "reinstall the game" is only *sometimes* the answer.
+
+Causes, in the order they actually occur:
+
+1. **Antivirus interference — the most common by far.** AV software quarantines, "cleans" or blocks BattlEye's files as it loads. Because BattlEye is a kernel-level anti-cheat, it looks a lot like malware to heuristic scanners. This is especially common with third-party suites (ESET, Avast, AVG, Kaspersky, Norton, Malwarebytes).
+2. **An interrupted or damaged download/update** — Steam left partial files behind.
+3. **A broken BattlEye install** — the service failed to install (often because the game was never run as admin once), or a previous uninstall left it half-removed.
+4. **Failing hardware** — see the warning below.
+
+**Fix it in this order:**
+
+1. **Verify the game files** — Steam → PUBG → Properties → Installed Files → *Verify integrity of game files*. Let it finish, reboot. This alone fixes most cases.
+2. **Reinstall BattlEye** — in `…\PUBG\TslGame\Binaries\Win64\BattlEye`, run `Uninstall_BattlEye.bat`, then launch PUBG so it reinstalls itself cleanly. (Or run `Install_BattlEye.bat` **as administrator**.)
+3. **Check your antivirus quarantine, then add exclusions** — restore anything it took from the PUBG or BattlEye folders, then **exclude the whole PUBG install directory**. Test once with third-party AV temporarily disabled to confirm.
+4. **Clear the Steam download cache** — Steam → Settings → Downloads → *Clear Download Cache*, then verify again. Do this if corruption keeps returning right after a verify.
+5. **Wipe leftover BattlEye state** — close Steam, delete the `BattlEye` folder in the game's `Binaries\Win64`, **and** the one at `C:\Program Files (x86)\Common Files\BattlEye`. Verify files so both rebuild from scratch.
+6. **Launch once as administrator** — BattlEye installs a Windows service; without admin rights that install can silently fail and leave a broken state.
+7. **Only then, reinstall the game.** It's the slowest option and rarely the one that helps.
+
+> ⚠️ **The one that sends you back to Class A:** if "Corrupted Data" **keeps returning after a clean verify and reinstall**, the files are arriving fine and being corrupted *afterwards*. That means the hardware underneath is mangling them — **unstable RAM (test with XMP off, then MemTest86) or a failing disk** (CrystalDiskInfo, `chkdsk`). Repeated integrity failures on freshly downloaded data are a genuine hardware red flag, not a game bug.
+
+Community references: [The Windows Club](https://www.thewindowsclub.com/pubg-error-25-battleye-corrupted-data) · [Appuals](https://appuals.com/pubg-error-25-battleye-corrupted-data/)
 
 ---
 
@@ -214,5 +242,9 @@ Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, Drive
 6. ✅ **Disable XMP/EXPO/DOCP** and test. If fixed → MemTest86, or run RAM slower / relaxed.
 7. ✅ Verify files, cap FPS, watch **GPU memory-junction temp** and **+12V** in HWiNFO64.
 8. ✅ Still power-cycling? Reseat parts, check PSU cables, test on the iGPU, suspect the PSU.
+
+**Different error? Jump classes:**
+- 🛡️ **"Interrupted by external program"** → not hardware. Exit overlays/RGB/macro apps from the tray, kill in-game overlays, test with Memory Integrity off. (Class B)
+- 🧩 **"[25] BattlEye: Corrupted Data"** → not hardware *usually*. Verify files → reinstall BattlEye → **check your antivirus quarantine and add exclusions**. If it returns after a clean reinstall, go test your RAM. (Class C)
 
 Work top to bottom, test after each step, and you'll usually find it well before you spend a cent.

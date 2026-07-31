@@ -8,16 +8,19 @@ If PUBG crashes to desktop, throws **“Out of video memory trying to allocate a
 
 ---
 
-## It handles both kinds of PUBG failure
+## It tells the three kinds of PUBG failure apart
 
-The tool first works out **which problem you actually have**, because these need opposite fixes:
+The tool first works out **which problem you actually have**, because these need completely different fixes:
 
 | Symptom | Class | What it means |
 |---|---|---|
 | "Out of video memory", crash mid-game, freeze, PC powers off | 💥 **Instability** | Hardware/driver — RAM/XMP, overclock, pagefile, PSU |
 | **"Interrupted by external program"**, PUBG Shield Reporter, `pubg_fail.log`, `[MHV]` | 🛡️ **Anti-cheat block** | A software conflict at launch — overlays, RGB/macro suites, injectors, hypervisor |
+| **"[25] BattlEye: Corrupted Data"**, failed checksums | 🧩 **File integrity** | The files aren't what they should be — antivirus quarantine, interrupted download, damaged BattlEye install |
 
-Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, or reinstall Windows over unstable memory. If you have **both**, the tool says so and orders the work.
+Getting this wrong wastes days — people replace RAM over an anti-cheat conflict, reinstall Windows over unstable memory, or reinstall the game ten times when their antivirus is quietly eating BattlEye. If you have **more than one**, the tool says so and orders the work.
+
+> One cross-check worth knowing: if "Corrupted Data" **keeps coming back after a clean reinstall**, that's no longer a file problem — something is corrupting freshly-downloaded bytes, which puts you back on unstable RAM or a failing disk.
 
 ## What it does
 
@@ -25,6 +28,7 @@ Getting this wrong wastes days — people replace RAM over an anti-cheat conflic
 
 - **PUBG logs** — `LogGPUCrash`, `E_OUTOFMEMORY`, render-thread hangs, fatal errors
 - **Anti-cheat** — parses `pubg_fail.log` (error code, diagnostic tag, modules loaded *inside* the game) and detects overlay/RGB/macro software that's running plus hypervisor / Memory Integrity state
+- **File integrity** — BattlEye files and service state, **antivirus detections acting on game/anti-cheat files**, Steam's install state, and corruption lines in the logs
 - **Windows Event Viewer** — Kernel-Power **41** (with/without bluescreen), **WHEA** hardware faults, GPU driver **TDRs**
 - **Memory** — XMP/EXPO state, actual vs rated speed
 - **System** — pagefile config, GPU driver + date, VRAM, disk health
@@ -61,6 +65,8 @@ No install, no dependencies. Works best on NVIDIA (uses `nvidia-smi` for exact V
 ## The fixes it recommends (in order)
 
 **If anti-cheat blocked your launch** it gives you a separate list first: exit overlays/RGB/macro apps from the tray → disable in-game overlays → remove injectors → test with Memory Integrity/hypervisor off (the `[MHV]` case) → repair game + BattlEye → `sfc`/`DISM` → clean boot.
+
+**If files failed an integrity check** (`[25] BattlEye: Corrupted Data`) it gives you that list: verify game files → reinstall BattlEye → check antivirus quarantine and add exclusions → clear Steam download cache → wipe leftover BattlEye state → run once as admin → and if it *still* returns, test RAM and disk.
 
 **For crashes/instability**, cheapest & most-likely first — do them one at a time and test after each:
 

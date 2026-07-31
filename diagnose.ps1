@@ -20,7 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$TOOL_VERSION = '1.1'
+$TOOL_VERSION = '1.2'
 if (-not $OutDir) { $OutDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 
 function Line($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
@@ -239,6 +239,67 @@ Line ("  Hypervisor running:     {0}" -f $hyperPresent) $(if ($hyperPresent) { '
 Line ("  Memory Integrity (HVCI): {0}" -f $hvciOn)       $(if ($hvciOn) { 'Yellow' } else { 'Gray' })
 
 # --------------------------------------------------------------------------
+# GAME / ANTI-CHEAT FILE INTEGRITY   ("[25] BattlEye: Corrupted Data" etc.)
+# Third failure class. The game is not crashing (class 1) and is not being
+# blocked by conflicting software (class 2) - a checksum failed. Usual causes:
+# damaged/incomplete files, antivirus quarantining BattlEye, an interrupted
+# update - or, if it returns after a clean reinstall, bad RAM/disk silently
+# corrupting the bytes.
+# --------------------------------------------------------------------------
+Head 'Game & anti-cheat file integrity'
+$since30 = (Get-Date).AddDays(-30)
+
+# Locate the PUBG install (independent of whether a launch block was recorded)
+$gameDir = $null
+foreach ($r in @($steamRoots | Select-Object -Unique)) {
+    $c = Join-Path $r 'steamapps\common\PUBG'
+    if (Test-Path $c) { $gameDir = $c; break }
+}
+
+# BattlEye's own files must exist and be a plausible size
+$beDir = if ($gameDir) { Join-Path $gameDir 'TslGame\Binaries\Win64\BattlEye' } else { $null }
+$beInstalled = [bool]($beDir -and (Test-Path $beDir))
+$beBad = @()
+if ($beInstalled) {
+    foreach ($f in @('BEClient_x64.dll', 'BEService_x64.exe')) {
+        $p = Join-Path $beDir $f
+        if (-not (Test-Path $p)) { $beBad += "$f is MISSING" }
+        elseif ((Get-Item $p).Length -lt 200KB) { $beBad += "$f is suspiciously small" }
+    }
+} elseif ($gameDir) { $beBad += 'the BattlEye folder is missing from the game install' }
+$beSvc = Get-Service -Name 'BEService' -ErrorAction SilentlyContinue
+
+# Antivirus is a leading cause: quarantining or "cleaning" BattlEye corrupts it
+$avProducts = @(Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty displayName -ErrorAction SilentlyContinue)
+$avThird = @($avProducts | Where-Object { $_ -and $_ -notmatch 'Windows Defender|Microsoft Defender' } | Sort-Object -Unique)
+$avHits = @()
+try {
+    $avHits = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; Id=1116,1117; StartTime=$since30} -ErrorAction SilentlyContinue |
+                Where-Object { $_.Message -match 'PUBG|TslGame|BattlEye|BEService' } |
+                ForEach-Object { $_.TimeCreated.ToString('yyyy-MM-dd HH:mm') } | Select-Object -First 5)
+} catch {}
+
+# Steam's own view of the install (StateFlags 4 = fully installed and up to date)
+$steamState = ''
+foreach ($r in @($steamRoots | Select-Object -Unique)) {
+    $mf = Join-Path $r 'steamapps\appmanifest_578080.acf'
+    if (Test-Path $mf) { $steamState = [regex]::Match((Get-Content $mf -Raw), '"StateFlags"\s+"(\d+)"').Groups[1].Value; break }
+}
+$steamDirty = [bool]($steamState -and $steamState -ne '4')
+
+# Corruption complaints the game itself recorded
+$beErrors = ScanLogs 'Corrupted Data|BattlEye.*(orrupt|ailed|rror)'
+
+Line ("  Game install:         {0}" -f $(if ($gameDir) { $gameDir } else { 'not found' }))
+Line ("  BattlEye files:       {0}" -f $(if ($beBad.Count) { ($beBad -join '; ') } else { 'present and plausible' })) $(if ($beBad.Count) { 'Red' } else { 'Gray' })
+Line ("  BEService:            {0}" -f $(if ($beSvc) { $beSvc.Status } else { 'not installed' }))
+Line ("  Steam install state:  {0}" -f $(if ($steamState) { "$steamState$(if($steamDirty){' (not fully installed)'})" } else { 'unknown' })) $(if ($steamDirty) { 'Yellow' } else { 'Gray' })
+Line ("  Third-party AV:       {0}" -f $(if ($avThird.Count) { $avThird -join ', ' } else { 'none (Defender only)' })) $(if ($avThird.Count) { 'Yellow' } else { 'Gray' })
+Line ("  AV acted on PUBG/BE:  {0}" -f $(if ($avHits.Count) { $avHits -join ', ' } else { 'no detections logged' })) $(if ($avHits.Count) { 'Red' } else { 'Gray' })
+Line ("  Corruption lines in logs: {0}" -f @($beErrors).Count) $(if (@($beErrors).Count) { 'Yellow' } else { 'Gray' })
+
+# --------------------------------------------------------------------------
 # WINDOWS EVENT LOG
 # --------------------------------------------------------------------------
 Head 'Windows event log (last 30 days)'
@@ -339,6 +400,28 @@ if ($acPresent -and $acDiag -match 'MHV') {
         "Hypervisor running=$hyperPresent, Memory Integrity=$hvciOn. These sometimes conflict with kernel anti-cheat. Worth disabling temporarily as a test if the launch block persists."
 }
 
+# ---- integrity findings ("[25] BattlEye: Corrupted Data" and friends) ----
+if ($beBad.Count -gt 0) {
+    Add-Finding 'high' 'BattlEye files are missing or damaged' `
+        ("{0}. This is exactly what produces errors like '[25] BattlEye: Corrupted Data' - the anti-cheat cannot verify itself, so the game refuses to start. Reinstall BattlEye and verify the game files." -f ($beBad -join '; '))
+}
+if ($avHits.Count -gt 0) {
+    Add-Finding 'high' 'Your antivirus acted on PUBG or BattlEye files' `
+        ("Defender logged detections referencing the game or its anti-cheat on: {0}. Quarantining or 'cleaning' those files corrupts them and causes integrity errors. Restore them, then exclude the PUBG folder." -f ($avHits -join ', '))
+}
+if ($avThird.Count -gt 0 -and ($beBad.Count -gt 0 -or @($beErrors).Count -gt 0)) {
+    Add-Finding 'medium' 'Third-party antivirus present alongside integrity errors' `
+        ("{0} is installed. Third-party AV is a leading cause of BattlEye 'Corrupted Data' - it can block or alter the anti-cheat as it loads. Exclude the PUBG install folder, or test with it briefly disabled." -f ($avThird -join ', '))
+}
+if ($steamDirty) {
+    Add-Finding 'medium' 'Steam does not consider PUBG fully installed' `
+        ("Steam's StateFlags for PUBG reads $steamState instead of 4. An interrupted download or update leaves damaged files that fail integrity checks - run Verify integrity of game files.")
+}
+if (@($beErrors).Count -gt 0) {
+    Add-Finding 'high' 'Corruption errors recorded in the game logs' `
+        ("{0} matching line(s). If a verify + clean BattlEye reinstall does not stop these, suspect the hardware underneath: unstable RAM or a failing disk can corrupt bytes that were downloaded perfectly." -f @($beErrors).Count)
+}
+
 if ($findings.Count -eq 0) {
     Add-Finding 'info' 'No strong crash signature found' `
         'This scan did not find recorded crash evidence. If PUBG is still crashing, play a session then run this again so it can catch fresh logs, and enable HWiNFO logging for temperatures/voltages.'
@@ -346,10 +429,14 @@ if ($findings.Count -eq 0) {
 
 # Which failure class(es) is this PC showing?
 $hasInstability = ($whea -gt 0 -or $kp0 -gt 0 -or $kpBsod -gt 0 -or @($oom).Count -gt 0 -or @($gpuCrash).Count -gt 0 -or @($rhang).Count -gt 0 -or $tdr -gt 0 -or @($wer).Count -ge 2)
-$errorClass = if ($acPresent -and $hasInstability) { 'both' }
-              elseif ($acPresent) { 'anticheat' }
-              elseif ($hasInstability) { 'instability' }
-              else { 'none' }
+$hasIntegrity = ($beBad.Count -gt 0 -or $avHits.Count -gt 0 -or $steamDirty -or @($beErrors).Count -gt 0)
+$classList = @()
+if ($hasInstability) { $classList += 'instability' }
+if ($acPresent)      { $classList += 'anticheat' }
+if ($hasIntegrity)   { $classList += 'integrity' }
+$errorClass = if ($classList.Count -eq 0) { 'none' }
+              elseif ($classList.Count -eq 1) { $classList[0] }
+              else { 'multiple' }
 
 # Headline verdict
 $verdict = 'No clear crash pattern detected yet'
@@ -357,10 +444,16 @@ if ($whea -gt 0) { $verdict = 'Hardware errors logged - test your RAM and check 
 elseif ($kp0 -gt 0 -or @($wer).Count -ge 2) { $verdict = 'Signs of memory/power instability - the XMP-off test is your top priority' }
 elseif (@($oom).Count -gt 0 -or @($gpuCrash).Count -gt 0) { $verdict = 'Graphics allocation failures - check pagefile, driver, and overclocks' }
 elseif (@($rhang).Count -gt 0 -or $tdr -gt 0) { $verdict = 'GPU hangs under load - driver / overclock / PSU' }
-if ($errorClass -eq 'anticheat') {
-    $verdict = 'Anti-cheat is blocking launch - close overlay/RGB software (this is not a hardware fault)'
-} elseif ($errorClass -eq 'both') {
-    $verdict = "$verdict  +  anti-cheat also blocked a launch (two separate problems)"
+
+switch ($errorClass) {
+    'anticheat' { $verdict = 'Anti-cheat is blocking launch - close overlay/RGB software (this is not a hardware fault)' }
+    'integrity' { $verdict = 'Game/anti-cheat files fail their integrity check - verify files and reinstall BattlEye (not a hardware fault)' }
+    'multiple'  {
+        $others = @(@($classList | Where-Object { $_ -ne 'instability' }) | ForEach-Object {
+            if ($_ -eq 'anticheat') { 'an anti-cheat launch block' } else { 'a file-integrity problem' } })
+        if ($hasInstability) { $verdict = "$verdict  +  " + ($others -join ' and ') + ' (separate problems)' }
+        else { $verdict = 'Launch problems detected: ' + ($others -join ' and ') + ' (separate problems)' }
+    }
 }
 
 # Fix list for the anti-cheat / launch-block class
@@ -372,6 +465,17 @@ $acFixes = @(
     [ordered]@{ step=5; title='Repair the anti-cheat / game files'; body='Steam > PUBG > Properties > Installed Files > Verify integrity. Then reinstall BattlEye: run BattlEye\\Install_BattlEye.bat in the game Binaries folder, or reinstall from Steam.'; relevant=$acPresent }
     [ordered]@{ step=6; title='Repair Windows itself'; body='In an admin terminal: "sfc /scannow", then "DISM /Online /Cleanup-Image /RestoreHealth". Corrupted system files can make anti-cheat fail its integrity checks.'; relevant=$acPresent }
     [ordered]@{ step=7; title='Boot clean to identify the conflict'; body='Run msconfig > Services > Hide all Microsoft services > Disable all, reboot, and launch PUBG. If it works, re-enable services in halves until the culprit appears.'; relevant=$acPresent }
+)
+
+# Fix list for the integrity class ("[25] BattlEye: Corrupted Data" etc.)
+$intFixes = @(
+    [ordered]@{ step=1; title='Verify the game files'; body='Steam > PUBG > Properties > Installed Files > Verify integrity of game files. This alone fixes most "Corrupted Data" cases - let it finish, then reboot.'; relevant=$true }
+    [ordered]@{ step=2; title='Reinstall BattlEye'; body='In TslGame\Binaries\Win64\BattlEye run Uninstall_BattlEye.bat, then launch PUBG so it reinstalls cleanly (or run Install_BattlEye.bat as administrator).'; relevant=($beBad.Count -gt 0 -or @($beErrors).Count -gt 0) }
+    [ordered]@{ step=3; title='Check antivirus quarantine, then add exclusions'; body='Restore anything taken from the PUBG or BattlEye folders, then exclude the whole PUBG install directory. Test once with third-party AV disabled - AV is the most common cause of this error.'; relevant=($avHits.Count -gt 0 -or $avThird.Count -gt 0) }
+    [ordered]@{ step=4; title='Clear the Steam download cache'; body='Steam > Settings > Downloads > Clear Download Cache, then verify again. Fixes corruption that keeps returning after re-verifying.'; relevant=$steamDirty }
+    [ordered]@{ step=5; title='Remove leftover BattlEye state'; body='Close Steam, delete the BattlEye folder in the game Binaries dir AND the one in Program Files (x86)\Common Files\BattlEye, then verify files so both rebuild from scratch.'; relevant=($beBad.Count -gt 0) }
+    [ordered]@{ step=6; title='Launch once as administrator'; body='BattlEye installs a Windows service; without admin rights that install can silently fail and leave a half-broken state.'; relevant=(-not $beSvc) }
+    [ordered]@{ step=7; title='If it comes back after a clean reinstall: check the hardware'; body='Repeated integrity failures on freshly downloaded files mean something is corrupting them in transit - test RAM (XMP off, then MemTest86) and check disk health with CrystalDiskInfo or chkdsk.'; relevant=($hasInstability -or $diskBad) }
 )
 
 # Ordered recommendations (mirrors the guide). 'relevant' highlights ones the data supports.
@@ -434,9 +538,22 @@ $report = [ordered]@{
         hypervisor     = [bool]$hyperPresent
         memoryIntegrity= [bool]$hvciOn
     }
+    integrity = [ordered]@{
+        gameDir         = $gameDir
+        battlEyeOk      = [bool]($beInstalled -and $beBad.Count -eq 0)
+        battlEyeIssues  = @($beBad)
+        beService       = $(if ($beSvc) { "$($beSvc.Status)" } else { 'not installed' })
+        steamState      = $steamState
+        steamDirty      = [bool]$steamDirty
+        thirdPartyAV    = @($avThird)
+        avDetections    = @($avHits)
+        logCorruptLines = @($beErrors).Count
+    }
     findings = @($findings)
     recommendations = @($rec)
     anticheatFixes = @($acFixes)
+    integrityFixes = @($intFixes)
+    classes = @($classList)
 }
 
 $json = $report | ConvertTo-Json -Depth 8
